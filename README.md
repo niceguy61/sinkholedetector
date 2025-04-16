@@ -1,6 +1,7 @@
 # 싱크홀 자동 감지 및 시각화 웹 어플리케이션
 
 실시간 싱크홀 발생 정보를 자동으로 수집하고 시각화하는 웹 애플리케이션입니다.
+제작기 : https://tabmania.tistory.com/entry/Amazon-Q-Developer-IDE%EB%A1%9C-sink-hole-%ED%91%9C%EC%8B%9C-%EC%9B%B9-%EC%96%B4%ED%94%8C%EB%A6%AC%EC%BC%80%EC%9D%B4%EC%85%98-%EC%83%9D%EC%84%B1
 
 ## 주요 기능
 
