@@ -12,34 +12,48 @@ Parameters:
     Description: RSS Feed URL for news collection
     Default: "https://www.yonhapnews.co.kr/RSS/news.xml"
 
+  WafAclArn:
+    Type: String
+    Description: ARN of existing WAF ACL to associate with CloudFront
+
 Resources:
-  # DynamoDB Table (unchanged)
   SinkholeTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub ${AWS::StackName}-sinkhole-data
-      BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: id
-          AttributeType: S
-        - AttributeName: pubDate
           AttributeType: S
       KeySchema:
         - AttributeName: id
           KeyType: HASH
-        - AttributeName: pubDate
-          KeyType: RANGE
-      GlobalSecondaryIndexes:
-        - IndexName: pubDate-index
-          KeySchema:
-            - AttributeName: pubDate
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-      StreamSpecification:
-        StreamViewType: NEW_AND_OLD_IMAGES
+      BillingMode: PAY_PER_REQUEST
+      TableName: !Sub ${AWS::StackName}-sinkhole-data
 
-  # IAM Role for Lambda Functions (unchanged)
+  # Lambda Function
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          exports.handler = async (event) => {
+            // Lambda function code would go here
+            console.log('Slack Webhook URL:', process.env.SLACK_WEBHOOK_URL);
+            console.log('RSS Feed URL:', process.env.RSS_FEED_URL);
+            return {
+              statusCode: 200,
+              body: JSON.stringify('Hello from Lambda!')
+            };
+          }
+      Runtime: nodejs14.x
+      Environment:
+        Variables:
+          SLACK_WEBHOOK_URL: !Ref SlackWebhookUrl
+          RSS_FEED_URL: !Ref RssFeedUrl
+          DYNAMODB_TABLE: !Ref SinkholeTable
+
+  # Lambda Execution Role
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -62,82 +76,125 @@ Resources:
                   - dynamodb:PutItem
                   - dynamodb:GetItem
                   - dynamodb:Query
-                  - dynamodb:Scan
-                  - dynamodb:UpdateItem
-                Resource: 
-                  - !GetAtt SinkholeTable.Arn
-                  - !Sub ${SinkholeTable.Arn}/index/*
+                Resource: !GetAtt SinkholeTable.Arn
 
-  # RSS Collector Lambda (unchanged)
-  RssCollectorFunction:
-    Type: AWS::Lambda::Function
+  # S3 Bucket for Frontend Files
+  FrontendBucket:
+    Type: AWS::S3::Bucket
     Properties:
-      FunctionName: !Sub ${AWS::StackName}-rss-collector
-      Handler: index.handler
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Code:
-        ZipFile: |
-          exports.handler = async (event) => {
-            // RSS collection logic will be implemented here
-            console.log('RSS collection triggered');
-          }
-      Runtime: nodejs18.x
-      Timeout: 30
-      Environment:
-        Variables:
-          DYNAMODB_TABLE: !Ref SinkholeTable
-          SLACK_WEBHOOK_URL: !Ref SlackWebhookUrl
-          RSS_FEED_URL: !Ref RssFeedUrl
+      BucketName: !Sub ${AWS::StackName}-frontend
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
 
-  # EventBridge Rule (unchanged)
-  RssCollectionRule:
-    Type: AWS::Events::Rule
+  # S3 Bucket for CloudFront Logs
+  CloudFrontLogsBucket:
+    Type: AWS::S3::Bucket
     Properties:
-      Description: "Trigger RSS collection every hour"
-      ScheduleExpression: "rate(1 hour)"
-      State: ENABLED
-      Targets:
-        - Arn: !GetAtt RssCollectorFunction.Arn
-          Id: "RssCollectorTarget"
+      BucketName: !Sub ${AWS::StackName}-cf-logs
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
 
-  # Permission for EventBridge (unchanged)
-  RssCollectorPermission:
-    Type: AWS::Lambda::Permission
+  # CloudFront Origin Access Identity
+  CloudFrontOAI:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
     Properties:
-      FunctionName: !Ref RssCollectorFunction
-      Action: lambda:InvokeFunction
-      Principal: events.amazonaws.com
-      SourceArn: !GetAtt RssCollectionRule.Arn
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub "OAI for ${AWS::StackName} frontend"
 
-  # API Gateway REST API with CORS configuration
+  # Bucket Policy for CloudFront Access
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              CanonicalUser: !GetAtt CloudFrontOAI.S3CanonicalUserId
+            Action: s3:GetObject
+            Resource: !Sub ${FrontendBucket.Arn}/*
+
+  # CloudFront Distribution
+  FrontendDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        IPV6Enabled: true
+        HttpVersion: http2
+        Origins:
+          - DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            Id: S3Origin
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub origin-access-identity/cloudfront/${CloudFrontOAI}
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          Compress: true
+          DefaultTTL: 86400
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+        PriceClass: PriceClass_100
+        WebACLId: !Ref WafAclArn
+        Logging:
+          Bucket: !GetAtt CloudFrontLogsBucket.DomainName
+          IncludeCookies: false
+          Prefix: "cf-logs/"
+        ViewerCertificate:
+          MinimumProtocolVersion: TLSv1.2_2021
+          CloudFrontDefaultCertificate: true
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+
   SinkholeApi:
     Type: AWS::ApiGateway::RestApi
     Properties:
       Name: !Sub ${AWS::StackName}-api
-      Description: API for Sinkhole Detection System
       EndpointConfiguration:
         Types:
           - REGIONAL
 
-  # API Key
   ApiKey:
     Type: AWS::ApiGateway::ApiKey
     Properties:
       Name: !Sub ${AWS::StackName}-api-key
-      Description: API Key for Sinkhole Detection System
       Enabled: true
 
-  # Usage Plan
   ApiUsagePlan:
     Type: AWS::ApiGateway::UsagePlan
     Properties:
       ApiStages:
         - ApiId: !Ref SinkholeApi
-          Stage: !Ref ApiStage
-      Description: Usage plan for Sinkhole Detection System
+          Stage: prod
       UsagePlanName: !Sub ${AWS::StackName}-usage-plan
 
-  # Usage Plan Key
   ApiUsagePlanKey:
     Type: AWS::ApiGateway::UsagePlanKey
     Properties:
@@ -145,123 +202,13 @@ Resources:
       KeyType: API_KEY
       UsagePlanId: !Ref ApiUsagePlan
 
-  # API Lambda Function (unchanged)
-  ApiFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub ${AWS::StackName}-api
-      Handler: index.handler
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Code:
-        ZipFile: |
-          exports.handler = async (event) => {
-            return {
-              statusCode: 200,
-              headers: {
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin,Access-Control-Allow-Methods,Access-Control-Allow-Headers',
-                'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS,HEAD,PATCH',
-                'Access-Control-Allow-Credentials': 'true',
-                'Access-Control-Max-Age': '3600'
-              },
-              body: JSON.stringify({ message: 'Success' })
-            };
-          }
-      Runtime: nodejs18.x
-      Timeout: 30
-      Environment:
-        Variables:
-          DYNAMODB_TABLE: !Ref SinkholeTable
-
-  # Root Resource OPTIONS Method
-  RootOptionsMethod:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref SinkholeApi
-      ResourceId: !GetAtt SinkholeApi.RootResourceId
-      HttpMethod: OPTIONS
-      AuthorizationType: NONE
-      Integration:
-        Type: MOCK
-        IntegrationResponses:
-          - StatusCode: "200"
-            ResponseParameters:
-              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin,Access-Control-Allow-Methods,Access-Control-Allow-Headers'"
-              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS,HEAD,PATCH'"
-              method.response.header.Access-Control-Allow-Origin: "'*'"
-              method.response.header.Access-Control-Allow-Credentials: "'true'"
-        RequestTemplates:
-          application/json: '{"statusCode": 200}'
-      MethodResponses:
-        - StatusCode: "200"
-          ResponseParameters:
-            method.response.header.Access-Control-Allow-Headers: true
-            method.response.header.Access-Control-Allow-Methods: true
-            method.response.header.Access-Control-Allow-Origin: true
-            method.response.header.Access-Control-Allow-Credentials: true
-
-  # Root Resource GET Method with API Key requirement
-  RootGetMethod:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref SinkholeApi
-      ResourceId: !GetAtt SinkholeApi.RootResourceId
-      HttpMethod: GET
-      AuthorizationType: NONE
-      ApiKeyRequired: true
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiFunction.Arn}/invocations
-      MethodResponses:
-        - StatusCode: "200"
-          ResponseParameters:
-            method.response.header.Access-Control-Allow-Origin: true
-        - StatusCode: "400"
-        - StatusCode: "500"
-
-  # API Gateway Deployment
-  ApiDeployment:
-    Type: AWS::ApiGateway::Deployment
-    DependsOn: 
-      - RootGetMethod
-      - RootOptionsMethod
-    Properties:
-      RestApiId: !Ref SinkholeApi
-
-  # API Gateway Stage
-  ApiStage:
-    Type: AWS::ApiGateway::Stage
-    Properties:
-      DeploymentId: !Ref ApiDeployment
-      RestApiId: !Ref SinkholeApi
-      StageName: prod
-
-  # API Domain Name
-  ApiDomainName:
-    Type: AWS::ApiGateway::DomainName
-    Properties:
-      DomainName: !Sub ${SinkholeApi}.execute-api.${AWS::Region}.amazonaws.com
-      EndpointConfiguration:
-        Types:
-          - REGIONAL
-
-  # Base Path Mapping
-  ApiBasePathMapping:
-    Type: AWS::ApiGateway::BasePathMapping
-    Properties:
-      DomainName: !Ref ApiDomainName
-      RestApiId: !Ref SinkholeApi
-      Stage: !Ref ApiStage
-
-  # Permission for API Gateway to invoke Lambda
   ApiPermission:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref ApiFunction
       Action: lambda:InvokeFunction
+      FunctionName: !GetAtt LambdaFunction.Arn
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${SinkholeApi}/*/*
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${SinkholeApi}/*
 
 Outputs:
   ApiEndpoint:
@@ -275,3 +222,15 @@ Outputs:
   DynamoDBTableName:
     Description: "DynamoDB table name"
     Value: !Ref SinkholeTable
+
+  FrontendBucketName:
+    Description: "Name of the S3 bucket hosting frontend files"
+    Value: !Ref FrontendBucket
+
+  CloudFrontDistributionDomain:
+    Description: "Domain name of the CloudFront distribution"
+    Value: !GetAtt FrontendDistribution.DomainName
+
+  CloudFrontDistributionId:
+    Description: "ID of the CloudFront distribution"
+    Value: !Ref FrontendDistribution

@@ -60,9 +60,34 @@ echo "VITE_API_ENDPOINT=$API_ENDPOINT" >> .env
 # Build frontend
 npm run build
 
+# Get S3 bucket name and CloudFront distribution ID
+S3_BUCKET=$(aws cloudformation describe-stacks \
+    --stack-name sinkhole-detector \
+    --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucketName`].OutputValue' \
+    --output text)
+
+CLOUDFRONT_DIST_ID=$(aws cloudformation describe-stacks \
+    --stack-name sinkhole-detector \
+    --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionId`].OutputValue' \
+    --output text)
+
+CLOUDFRONT_DOMAIN=$(aws cloudformation describe-stacks \
+    --stack-name sinkhole-detector \
+    --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionDomain`].OutputValue' \
+    --output text)
+
+# Upload frontend build to S3
+echo "Uploading frontend build to S3..."
+aws s3 sync dist/ s3://$S3_BUCKET/ --delete
+
+# Invalidate CloudFront cache
+echo "Invalidating CloudFront cache..."
+aws cloudfront create-invalidation \
+    --distribution-id $CLOUDFRONT_DIST_ID \
+    --paths "/*"
+
 echo "Deployment complete!"
 echo "API Endpoint: $API_ENDPOINT"
-echo "Next steps:"
-echo "1. Upload the frontend/dist directory to your web hosting service"
-echo "2. Configure CORS in API Gateway if needed"
-echo "3. Test the application"
+echo "Frontend URL: https://$CLOUDFRONT_DOMAIN"
+echo "Please wait a few minutes for the CloudFront invalidation to complete."
+

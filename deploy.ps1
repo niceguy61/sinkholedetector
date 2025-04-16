@@ -15,7 +15,7 @@ Write-Host "Deploying AWS Infrastructure..."
 Set-Location -Path infrastructure
 aws cloudformation deploy `
     --template-file template.yaml `
-    --stack-name sinkhole-detector `
+    --stack-name sinkhole-detector-1 `
     --parameter-overrides `
         SlackWebhookUrl=$env:SLACK_WEBHOOK_URL `
         RssFeedUrl=$env:RSS_FEED_URL `
@@ -23,7 +23,7 @@ aws cloudformation deploy `
 
 # Get API endpoint
 $API_ENDPOINT = aws cloudformation describe-stacks `
-    --stack-name sinkhole-detector `
+    --stack-name sinkhole-detector-1 `
     --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' `
     --output text
 
@@ -40,11 +40,11 @@ Compress-Archive -Path * -DestinationPath ..\..\infrastructure\api.zip -Force
 Write-Host "Updating Lambda functions..."
 Set-Location -Path ..\..\infrastructure
 aws lambda update-function-code `
-    --function-name sinkhole-detector-rss-collector `
+    --function-name sinkhole-detector-1-rss-collector `
     --zip-file fileb://collector.zip
 
 aws lambda update-function-code `
-    --function-name sinkhole-detector-api `
+    --function-name sinkhole-detector-1-api `
     --zip-file fileb://api.zip
 
 # Setup frontend
@@ -59,9 +59,34 @@ Add-Content -Path .env -Value "VITE_API_ENDPOINT=$API_ENDPOINT"
 # Build frontend
 npm run build
 
+# Get S3 bucket name and CloudFront distribution ID
+$S3_BUCKET = aws cloudformation describe-stacks `
+    --stack-name sinkhole-detector-1 `
+    --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue" `
+    --output text
+
+$CLOUDFRONT_DIST_ID = aws cloudformation describe-stacks `
+    --stack-name sinkhole-detector-1 `
+    --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" `
+    --output text
+
+$CLOUDFRONT_DOMAIN = aws cloudformation describe-stacks `
+    --stack-name sinkhole-detector-1 `
+    --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionDomain'].OutputValue" `
+    --output text
+
+# Upload frontend build to S3
+Write-Host "Uploading frontend build to S3..."
+aws s3 sync dist/ "s3://$S3_BUCKET/" --delete
+
+# Invalidate CloudFront cache
+Write-Host "Invalidating CloudFront cache..."
+aws cloudfront create-invalidation `
+    --distribution-id $CLOUDFRONT_DIST_ID `
+    --paths "/*"
+
 Write-Host "Deployment complete!"
 Write-Host "API Endpoint: $API_ENDPOINT"
-Write-Host "Next steps:"
-Write-Host "1. Upload the frontend/dist directory to your web hosting service"
-Write-Host "2. Configure CORS in API Gateway if needed"
-Write-Host "3. Test the application"
+Write-Host "Frontend URL: https://$CLOUDFRONT_DOMAIN"
+Write-Host "Please wait a few minutes for the CloudFront invalidation to complete."
+
