@@ -1,0 +1,17 @@
+{
+  "name": "sinkhole-rss-collector",
+  "version": "1.0.0",
+  "description": "RSS collector for sinkhole detection",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "xml2js": "^0.6.2",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}

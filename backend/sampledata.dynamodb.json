@@ -1,0 +1,39 @@
+{
+  "locations": {
+    "L": [
+      {
+        "M": {
+          "id": { "S": "seoul_city_hall" },
+          "name": { "S": "서울특별시청" },
+          "coordinates": {
+            "M": {
+              "longitude": { "N": "126.9779" },
+              "latitude": { "N": "37.5665" }
+            }
+          },
+          "address": { "S": "서울특별시 중구 세종대로 110" },
+          "description": { "S": "서울특별시의 행정 중심지" },
+          "type": { "S": "government_building" },
+          "lastUpdated": { "S": "2024-01-17T00:00:00+09:00" }
+        }
+      },
+      {
+        "M": {
+          "id": { "S": "AKR20250416171800527" },
+          "name": { "S": "진도 강풍주의보 싱크홀 발생" },
+          "coordinates": {
+            "M": {
+              "longitude": { "N": "126.2631" },
+              "latitude": { "N": "34.4867" }
+            }
+          },
+          "description": { "S": "(광주=연합뉴스) 기상청은 16일 오후 11시를 기해 진도에 강풍주의보를 발효한다고 밝혔다." },
+          "type": { "S": "sinkhole" },
+          "pubDate": { "S": "2025-04-16T22:59:56+09:00" },
+          "source": { "S": "https://www.yna.co.kr/view/AKR20250416171800527" },
+          "lastUpdated": { "S": "2025-04-16T22:59:56+09:00" }
+        }
+      }
+    ]
+  }
+}
