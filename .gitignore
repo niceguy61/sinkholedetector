@@ -2,3 +2,5 @@
 node_modules
 dist
 .bin
+api.zip
+collector.zip
